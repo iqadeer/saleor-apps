@@ -9,7 +9,8 @@ This is a Saleor SMTP Application that handles email notifications for e-commerc
 ### Development
 
 - `pnpm install` - Install dependencies
-- `pnpm dev` - Start development server (available at http://localhost:3000)
+- `pnpm dev` - Start development server with node inspector (http://localhost:3000; use for tunnel/ngrok-based development)
+- `pnpm dev:local` - Start development server on **port 3002** - the command for local development against Saleor running in Docker behind Traefik (matches `.env.local.docker.example`)
 - `pnpm build` - Build the application
 - `pnpm start` - Start production server
 
@@ -83,13 +84,18 @@ Located in `/src/modules/smtp/configuration/`, manages email templates and SMTP 
 
 ### Environment Configuration
 
-The app supports multiple APL (Auth Persistence Layer) options:
+The app supports multiple APL (Auth Persistence Layer) options, set via `APL` in `.env.local`:
 
-- `file` - Local development (default)
+- `file` - Local development (default here); auth state in `apps/smtp/.saleor-app-auth.json` (gitignored, single installation, exact `saleorApiUrl` match - see `docs/app-registration-and-auth.md`)
 - `upstash` - Production with Redis
 - `dynamodb` - AWS DynamoDB
 
-Set via `APL` environment variable in `.env` file.
+For local development (Saleor in Docker behind Traefik) copy `.env.local.docker.example` to `.env.local` and fill in `SECRET_KEY`. The two base-URL variables are the most important:
+
+- `APP_IFRAME_BASE_URL=http://localhost:3002` - the app **from the browser** (manifest `appUrl`)
+- `APP_API_BASE_URL=http://host.docker.internal:3002` - the app **from the Saleor containers** (registration endpoint, webhook targets, tRPC context `baseUrl` since `7863b3da`)
+
+Full local setup (ports, Traefik URLs, platform env interplay): `docs/local-development.md`.
 
 ### Testing Approach
 
@@ -102,7 +108,15 @@ Set via `APL` environment variable in `.env` file.
 ### Important Notes
 
 - Always commit the `/generated` folder after GraphQL changes
-- The app requires Saleor version >=3.11.7 <4
-- Use ngrok for local webhook testing
+- The app requires Saleor version `>=3.22 <3.24` (`REQUIRED_SALEOR_VERSION` in `src/saleor-app.ts`); registration rejects other versions
+- For local Docker development Saleor reaches the app via `host.docker.internal` (`APP_API_BASE_URL`) - no ngrok needed; ngrok is only for tunnel-based development
+- The registered `saleorApiUrl` in `.saleor-app-auth.json` must equal the platform's `DASHBOARD_API_URL` byte-for-byte, or every tRPC call fails with `401 Missing auth data` - fix by re-registering (procedure in `docs/app-registration-and-auth.md`)
 - MJML templates support Handlebars variables for dynamic content
 - All webhook handlers are in `/src/pages/api/webhooks/`
+
+### Documentation
+
+- `docs/local-development.md` - local URLs/ports, env, Docker + Traefik networking
+- `docs/app-registration-and-auth.md` - FileAPL, registration/re-registration, app token vs Dashboard user JWT
+- `docs/troubleshooting.md` - `Missing auth data` 401, secure-context workaround, webhook delivery
+- `docs/email-templates-analysis.md` - template structure and local preview

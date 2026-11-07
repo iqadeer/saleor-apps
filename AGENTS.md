@@ -120,6 +120,12 @@ static ValidationError = BaseError.subclass("ValidationError", {
     - If many changes applied in single commit, create multiple changesets
     - Ensure changeset has a good value, describing what was the actual change. It should be less technical than the commit. Best if it has before/after described.
 
+## App-specific docs
+
+Some apps ship their own `AGENTS.md` and `docs/` beyond this root guide - read them before working in that app.
+
+- **SMTP** (`apps/smtp`): app instructions in `apps/smtp/AGENTS.md`; local setup, registration/auth, and troubleshooting references in `apps/smtp/docs/` (`local-development.md`, `app-registration-and-auth.md`, `troubleshooting.md`, `email-templates-analysis.md`).
+
 ## Directory Map (where to look)
 
 Requests often name a vendor, protocol or feature instead of a directory. Match the keyword to the

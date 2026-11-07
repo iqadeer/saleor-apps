@@ -183,6 +183,14 @@ export default {
     "adyen",
     "Dropin",
     "testclient",
+    // Traefik proxy (proper noun) + local reverse-proxy dev setup
+    "traefik",
+    "Traefik",
+    // JSON Web Key Set (auth/JWT verification)
+    "jwks",
+    "JWKS",
+    // local dev domain suffix
+    "childnest",
   ],
   language: "en-US",
   useGitignore: true,
