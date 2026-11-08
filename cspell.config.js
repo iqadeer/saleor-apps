@@ -191,6 +191,11 @@ export default {
     "JWKS",
     // local dev domain suffix
     "childnest",
+    // tunneling tool + Python urllib method (docs examples)
+    "ngrok",
+    "urlopen",
+    // base64 substring from a Saleor variant ID in a docs curl example
+    "Zhcmlhbn",
   ],
   language: "en-US",
   useGitignore: true,

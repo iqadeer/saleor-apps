@@ -54,39 +54,129 @@ It also implements webhooks to allow updating the status of Transactions from th
 - `TRANSACTION_CHARGE_REQUESTED`
 - `TRANSACTION_CANCELATION_REQUESTED`
 
-### Running the Dummy Payment App
+### Local development and integration (this repository)
 
-To run the Dummy Payment App locally, follow these steps:
+This section documents the **verified local setup** for this repository:
+the app runs on the host (Windows) with `pnpm dev:local`; Saleor's API,
+workers and Dashboard run in Docker behind Traefik (`saleor-platform` repo).
+Deeper references: [`docs/local-development.md`](docs/local-development.md),
+[`docs/app-registration-and-auth.md`](docs/app-registration-and-auth.md),
+[`docs/troubleshooting.md`](docs/troubleshooting.md).
 
-1. **Install dependencies**
+#### 1. Prerequisites
 
-This project uses [pnpm](https://pnpm.io/) as the package manager. If you don't have it installed, you can enable it with corepack:
+- Node.js 18.17.0 – 20.x and [pnpm](https://pnpm.io/) (`corepack enable pnpm`)
+- The local Saleor stack from `saleor-platform` running (API on
+  `http://api.childnest.co.uk:8080/graphql/`, Dashboard on
+  `http://dashboard.childnest.co.uk:8080/`)
+- Docker Desktop (provides `host.docker.internal`; Linux needs
+  `extra_hosts: ["host.docker.internal:host-gateway"]`)
+- The `*.childnest.co.uk` domains mapped to `127.0.0.1` in the hosts file
+
+#### 2. Environment variables
+
+Copy the tested example (all values in it already work for this stack):
 
 ```sh
-npm install --global corepack@latest
-corepack enable pnpm
+cp .env.local.docker.example .env.local
+```
+
+| Variable              | Value (local)                      | Purpose                                                                                   |
+| --------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| `APP_IFRAME_BASE_URL` | `http://localhost:3001`            | **Browser → app** (manifest `appUrl`; the Dashboard iframe loads the app here)             |
+| `APP_API_BASE_URL`    | `http://host.docker.internal:3001` | **Saleor container → app** (registration endpoint and all webhook targets)                 |
+
+No secrets are needed: the app token arrives from Saleor at registration
+time and is stored in the gitignored `.saleor-app-auth.json` (file APL,
+single installation, re-read on every request). All other variables
+(`APL`, `ALLOWED_DOMAIN_PATTERN`, DynamoDB, cron) are optional locally — see
+the fully commented `.env.local.docker.example`.
+
+#### 3. Running the app locally
+
+```sh
 pnpm install
+pnpm dev:local        # Next.js dev server on http://localhost:3001 (port 3000 with pnpm dev)
 ```
 
-2. **(Optional) Set up environment variables for custom URLs**
+Verify: `curl -sI http://localhost:3001/` → 200, and
+`curl -s http://localhost:3001/api/manifest` shows `appUrl` on
+`localhost:3001` and `tokenTargetUrl`/webhook targets on
+`host.docker.internal:3001`.
 
-By default, no environment variables are required. However, if you are developing locally with Docker or using tunnels, you may want to customize the app's URLs. Copy the example environment file if you want to override defaults:
+#### 4. Docker-to-host networking: `localhost` vs `host.docker.internal`
 
-```sh
-cp .env.example .env
-```
+The browser reaches the app at `localhost:3001`; the Saleor **containers**
+must reach it at `host.docker.internal:3001` — `localhost` inside a
+container is the container itself, not your machine. That is the whole
+reason two base-URL variables exist. Wrong `APP_IFRAME_BASE_URL` → broken
+iframe; wrong `APP_API_BASE_URL` → installation fails or webhooks silently
+stop arriving. Details and a reachability test:
+[`docs/local-development.md`](docs/local-development.md),
+[`docs/troubleshooting.md`](docs/troubleshooting.md).
 
-Check [Saleor Docs about local app development](https://docs.saleor.io/developer/extending/apps/local-app-development) for more details
+#### 5. Installing the app in Saleor Dashboard
 
-3. **Run the app locally**
+Dashboard → Apps → **Add app** → Custom app → manifest URL
+`http://localhost:3001/api/manifest` (browser-facing). Saleor then calls
+`POST http://host.docker.internal:3001/api/register` with the `saleor-api-url`
+header (`http://api.childnest.co.uk:8080/graphql/`, derived from the platform
+`PUBLIC_URL`) and the app token; the app re-verifies the token and stores
+`{ token, saleorApiUrl, appId, jwks }` in `.saleor-app-auth.json`.
 
-Start the development server:
+#### 6. Permissions and webhooks
 
-```sh
-pnpm dev
-```
+Declared in the manifest (granted/created at installation):
 
-The app will be available at [http://localhost:3000](http://localhost:3000).
+- Permissions: `MANAGE_CHECKOUTS`, `HANDLE_CHECKOUTS`, `HANDLE_PAYMENTS`,
+  `MANAGE_ORDERS`
+- Webhooks: `PAYMENT_GATEWAY_INITIALIZE_SESSION`,
+  `TRANSACTION_INITIALIZE_SESSION`, `TRANSACTION_PROCESS_SESSION`,
+  `TRANSACTION_REFUND_REQUESTED`, `TRANSACTION_CHARGE_REQUESTED`,
+  `TRANSACTION_CANCELATION_REQUESTED` — targets derived from
+  `APP_API_BASE_URL`; check them under Dashboard → Apps → Dummy Payment App →
+  Webhooks. Full details and the re-registration procedure (when the stored
+  `saleorApiUrl` drifts from `DASHBOARD_API_URL` and tRPC calls fail with
+  `401 Missing auth data`):
+  [`docs/app-registration-and-auth.md`](docs/app-registration-and-auth.md).
+
+#### 7. Channel and payment gateway configuration
+
+None beyond installing the app: the gateway
+`saleor.io.dummy-payment-app` ("Dummy Payment App") appears in
+`availablePaymentGateways` for every channel, with `currencies` following
+the channel currency (verified: `USD` on `default-channel`, `PLN` on
+`channel-pln`), alongside the built-in gift-card gateway.
+
+#### 8. Storefront integration and checkout testing
+
+- **App's own UI** (Dashboard → Dummy Payment App): create checkout → set
+  delivery → choose the `TRANSACTION_INITIALIZE_SESSION` response (event
+type, e.g. `CHARGE_SUCCESS`) → initialize transaction → complete checkout.
+- **Paper storefront**: checkout calls `transactionInitialize` (no `action`
+  arg; channel default strategy applies) then `checkoutComplete`. The
+  client-side dummy-gateway filter requires
+  `NEXT_PUBLIC_ALLOW_DUMMY_PAYMENT` to be **inlined at image build time** —
+  see `docs/troubleshooting.md` for the exact fix and symptom (*No payment
+  gateway configured* despite Saleor returning the gateway).
+
+#### 9. End-to-end payment verification (verified against this stack)
+
+1. `checkoutCreate` returns the dummy gateway in `availablePaymentGateways`
+2. `transactionInitialize` → `CHARGE_SUCCESS`, `"Great success!"`, no errors
+3. `checkoutComplete` → new order (`UNFULFILLED`)
+4. Dashboard → order → Transactions → REFUND → `TRANSACTION_REFUND_REQUESTED`
+   webhook updates the transaction
+
+Ready-made raw GraphQL commands for steps 1–2 are in
+[`docs/app-registration-and-auth.md`](docs/app-registration-and-auth.md).
+
+#### Generic local development (no Docker / tunnels)
+
+If you develop against a tunnelled (ngrok) URL instead of local Docker, no
+environment variables are required at all — leave both base URLs unset and
+the app falls back to the request `Host` header. See
+[Saleor docs about local app development](https://docs.saleor.io/developer/extending/apps/local-app-development).
 
 ### How to use the app?
 

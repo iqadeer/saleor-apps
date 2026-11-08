@@ -17,10 +17,14 @@ pnpm install  # Install dependencies
 ### Development
 
 ```bash
-pnpm dev      # Start dev server with codegen and Node.js inspector on port 3000
+pnpm dev      # Start dev server with codegen and Node.js inspector on port 3000 (tunnel/ngrok development)
+pnpm dev:local  # Start dev server on port 3001 - THE command for local development against Saleor in Docker behind Traefik (matches .env.local.docker.example)
 pnpm build    # Build for production (runs codegen first)
 pnpm start    # Start production server
 ```
+
+Note: the SMTP app in this monorepo also uses `pnpm dev:local` but on port
+**3002** - both apps run side by side; don't copy ports between them.
 
 ### Code Quality
 
@@ -125,12 +129,32 @@ Created via `createClient` in `src/lib/create-graphql-client.ts`:
 
 ### Environment Variables
 
-Optional for local development (defaults work without Docker):
+Optional for generic local development (defaults work without Docker), but
+two of them are **required and specific** for the verified local setup in
+this repository (Saleor in Docker behind Traefik, app on the Windows host):
 
-- `APP_IFRAME_BASE_URL` - Base URL for iframe (e.g., `http://localhost:3000`)
-- `APP_API_BASE_URL` - Base URL for webhooks (e.g., `http://host.docker.internal:3000` for Docker)
-- `APL` - Auth persistence layer type: `file` (default), `upstash`, `dynamodb`
-- APL-specific vars: `FILE_APL_PATH`, `UPSTASH_URL`, `UPSTASH_TOKEN`
+- `APP_IFRAME_BASE_URL=http://localhost:3001` - **browser → app** (manifest `appUrl`; the Dashboard iframe)
+- `APP_API_BASE_URL=http://host.docker.internal:3001` - **Saleor container → app** (registration endpoint + all webhook targets; `localhost` would be the container itself)
+- `APL` - Auth persistence layer type: `file` (default, local), `upstash`, `dynamodb`
+- APL-specific vars: `FILE_APL_PATH` (default `.saleor-app-auth.json`), `UPSTASH_URL`, `UPSTASH_TOKEN`
+
+**Local setup workflow**: `cp .env.local.docker.example .env.local` (all
+values in the example already work for this stack; no secrets needed). Then
+`pnpm dev:local`, install the app in the Dashboard from manifest URL
+`http://localhost:3001/api/manifest` (browser-facing). Details:
+`docs/local-development.md`.
+
+### APL auth file behavior (file APL, local)
+
+- File: `apps/dummy-payment-app/.saleor-app-auth.json` (gitignored, single
+  installation; never commit it or its token)
+- Every tRPC call is resolved by **exact string equality** of the
+  `saleor-api-url` header against the stored `saleorApiUrl` (trailing slash
+  included) - the stored value must equal the platform
+  `DASHBOARD_API_URL` byte-for-byte, or calls fail with
+  `401 "Missing auth data"`
+- The file is re-read per request; re-registration applies without restart
+  (procedure: `docs/app-registration-and-auth.md`)
 
 ## Testing Payment Flows
 
@@ -166,3 +190,18 @@ For more details check Saleor GraphQL schema and docs: docs.saleor.io
 - Node version: 18.17.0 - 20.x required
 - Uses ES modules (`"type": "module"` in package.json)
 - Transaction external URLs link back to app UI for status updates
+
+### Local integration (verified setup)
+
+- Gateway ID is `saleor.io.dummy-payment-app` (`src/lib/gateway-id.ts`); the manifest declares 4 permissions (`MANAGE_CHECKOUTS`, `HANDLE_CHECKOUTS`, `HANDLE_PAYMENTS`, `MANAGE_ORDERS`) and 6 webhooks - targets come from `APP_API_BASE_URL` at installation time
+- The gateway appears per channel with `currencies` following the channel currency (verified USD/PLN); the built-in `saleor.io.gift-card-payment-gateway` appears alongside it and is ignored by the Paper storefront by design
+- Storefront checkouts call `transactionInitialize` **without** the `action` arg (channel default strategy; passing `action` needs `HANDLE_PAYMENTS` on the caller), then `checkoutComplete`
+- **Storefront-side gotcha**: the Paper storefront filters dummy gateways client-side on `NEXT_PUBLIC_ALLOW_DUMMY_PAYMENT`, which is **inlined at image build time** - a runtime-only `ALLOW_DUMMY_PAYMENT` does not make the gateway show up in the storefront (fixed in storefront-paper `d421e605`; symptom: "No payment gateway configured" while the API returns the gateway)
+- Encountered issues and verified fixes: `docs/troubleshooting.md`
+
+## Documentation
+
+- `docs/local-development.md` - local URLs/ports, env, Docker + Traefik networking, platform env interplay
+- `docs/app-registration-and-auth.md` - FileAPL, installation/registration, permissions, webhooks, channel/gateway config, storefront integration, end-to-end verification with raw GraphQL
+- `docs/troubleshooting.md` - gateway filtered client-side, URL/networking mistakes, `Missing auth data` 401, webhook and payment initialization failures, build-time vs runtime env
+- `.env.local.docker.example` - fully commented, tested local env (copy to `.env.local`)

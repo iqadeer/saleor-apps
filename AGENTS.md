@@ -125,6 +125,7 @@ static ValidationError = BaseError.subclass("ValidationError", {
 Some apps ship their own `AGENTS.md` and `docs/` beyond this root guide - read them before working in that app.
 
 - **SMTP** (`apps/smtp`): app instructions in `apps/smtp/AGENTS.md`; local setup, registration/auth, and troubleshooting references in `apps/smtp/docs/` (`local-development.md`, `app-registration-and-auth.md`, `troubleshooting.md`, `email-templates-analysis.md`).
+- **Dummy Payment App** (`apps/dummy-payment-app`): app instructions in `apps/dummy-payment-app/AGENTS.md`; local setup, installation/registration/gateway config, and troubleshooting references in `apps/dummy-payment-app/docs/` (`local-development.md`, `app-registration-and-auth.md`, `troubleshooting.md`); tested env example in `apps/dummy-payment-app/.env.local.docker.example`.
 
 ## Directory Map (where to look)
 
