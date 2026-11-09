@@ -1,0 +1,82 @@
+# ============================================================================
+# Dummy Payment App - direct-localhost deployment (Stage 1)
+#
+#   Browser  -> http://localhost:3001            (Dashboard iframe)
+#   Saleor   -> http://host.docker.internal:3001 (registration + webhooks)
+#
+#   docker compose up -d --build    # build + start
+#   docker compose up -d app        # start without rebuilding
+#   docker compose logs -f app      # tail logs
+#   docker compose ps               # health/status
+#   docker compose stop app         # stop (image kept)
+#   docker compose down             # stop + remove container
+#
+#   Rebuild after changing a build arg (NEXT_PUBLIC_ALLOW_DUMMY_PAYMENT):
+#     docker compose up -d --build app
+#   (Next.js inlines NEXT_PUBLIC_* into the client bundle at build time,
+#   so a rebuild is the only way to change it.)
+#
+# Stage 2 note: this compose keeps the host port mapping for direct
+# localhost access. The container also joins the shared `saleor-proxy-net`
+# network (with a stable alias) so Traefik's file-based dynamic routing can
+# target it later without any image rebuild. No Traefik labels here on
+# purpose - Stage 2 uses the file provider, not the Docker provider.
+# ============================================================================
+
+name: saleor-apps-dummy-payment
+
+services:
+  app:
+    image: admincareout/kidl:saleor-app-dummy-payment-1.0
+    container_name: saleor-app-dummy-payment
+    build:
+      # Build context is the monorepo root: the app uses pnpm workspace
+      # dependencies (workspace:*/catalog:) that only resolve from the root.
+      # The ignore file needs no flag: Docker (25+) automatically uses
+      # apps/dummy-payment-app/Dockerfile.dockerignore (named after the
+      # Dockerfile, same directory), which then REPLACES the root
+      # .dockerignore for this build. It keeps the context to this app +
+      # packages/ + root workspace files (~5 MB) and strips every env and
+      # auth file so secrets can never reach an image layer.
+      context: ../..
+      dockerfile: apps/dummy-payment-app/Dockerfile
+      args:
+        # Build-time only - inlined into the client bundle at `next build`.
+        # Interpolated from shell / .env / `--env-file .env.docker`;
+        # defaults to true for this initial deployment (Dummy Payment is the
+        # active payment method until Stripe replaces it).
+        NEXT_PUBLIC_ALLOW_DUMMY_PAYMENT: ${NEXT_PUBLIC_ALLOW_DUMMY_PAYMENT:-true}
+    ports:
+      # host:container - direct localhost access (Stage 1)
+      - "3001:3000"
+    env_file:
+      - .env.docker
+    extra_hosts:
+      # The app's APL stores saleorApiUrl=http://api.childnest.co.uk:8080/graphql/.
+      # That name only exists in the Windows hosts file, so resolve it to the
+      # Docker host inside the container; port 8080 is Traefik, which routes
+      # to the Saleor API. Same mechanism the Paper storefront uses.
+      - "api.childnest.co.uk:host-gateway"
+      # APP_API_BASE_URL uses host.docker.internal (Saleor -> app via the
+      # host port). Provided by Docker Desktop on Windows/macOS by default;
+      # declared explicitly so this compose also works on Linux.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Existing app authentication (FileAPL): token + saleorApiUrl + appId +
+      # jwks. Mounted read-write on purpose - the /api/register endpoint
+      # rewrites this file during (re-)registration, so a read-only mount
+      # would break token rotation. NOT baked into the image (the auth file
+      # is excluded from the build context by Dockerfile.dockerignore).
+      - ./.saleor-app-auth.json:/app/.saleor-app-auth.json
+    networks:
+      default:
+      saleor-proxy-net:
+        aliases:
+          - saleor-app-dummy-payment
+    restart: unless-stopped
+
+networks:
+  # Created by the saleor-platform project (docker-compose.prod.yml,
+  # pinned daemon-level name "saleor-proxy-net"); referenced, never created.
+  saleor-proxy-net:
+    external: true

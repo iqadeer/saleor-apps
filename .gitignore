@@ -42,9 +42,12 @@ yarn-error.log*
 .env.development.local
 .env.test.local
 .env.production.local
+.env.docker
 
 # misc
+# App authentication files (FileAPL) and any local copies of them.
 .saleor-app-auth.json
+.saleor-app-auth*.json
 .DS_Store
 *.pem
 

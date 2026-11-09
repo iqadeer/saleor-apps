@@ -1,0 +1,31 @@
+# Docker build context exclusions (context = repository root; see
+# apps/*/Dockerfile and apps/*/compose.yml).
+#
+# The monorepo is large - keep the context lean and, importantly, keep
+# secrets OUT of the context so they can never end up in image layers.
+
+# VCS
+.git
+
+# Dependencies and build artifacts (rebuilt inside the image)
+**/node_modules
+**/.next
+**/.turbo
+**/*.tsbuildinfo
+
+# Secrets and local state - never baked into images
+**/.env
+**/.env.*
+!**/.env.docker.example
+**/.saleor-app-auth.json
+**/.saleor-app-auth*.json
+
+# Local logs and OS noise
+**/*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Upstream docs/images not needed by the production build
+**/docs/*.png
+**/docs/*.jpg

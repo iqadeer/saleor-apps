@@ -196,6 +196,20 @@ export default {
     "urlopen",
     // base64 substring from a Saleor variant ID in a docs curl example
     "Zhcmlhbn",
+    // Dockerfile instruction (dockerize-saleor-app skill)
+    "HEALTHCHECK",
+    "healthcheck",
+    // image registry / repo name (local deployment image tags)
+    "admincareout",
+    "kidl",
+    // verification container names (README validation sections)
+    "imgcheck",
+    // context probe image name (dockerize-saleor-app skill)
+    "ctxprobe",
+    // used as a verb for NEXT_PUBLIC_* build-time replacement
+    "inlines",
+    // encryption terminology (smtp .env.docker.example)
+    "undecryptable",
   ],
   language: "en-US",
   useGitignore: true,

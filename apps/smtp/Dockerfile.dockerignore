@@ -1,0 +1,91 @@
+# ============================================================================
+# SMTP App - Docker build context exclusions
+#
+# HOW THIS FILE IS SELECTED
+#   Docker automatically pairs a Dockerfile with an ignore file named after
+#   it in the same directory: apps/smtp/Dockerfile -> apps/smtp/
+#   Dockerfile.dockerignore. When this file exists, it REPLACES the
+#   repository-root .dockerignore for this build - the two are NOT merged -
+#   so this file must be self-contained. (Docker 25+; "Dockerfile-specific
+#   .dockerignore" in the Docker docs.)
+#
+# PATH SEMANTICS
+#   The build context is the MONOREPO ROOT, two levels above this file (the
+#   app uses pnpm workspace:*/catalog: dependencies that only resolve from
+#   the root - see the Dockerfile header and compose.yml). All patterns
+#   below are therefore relative to the repository root, NOT to apps/smtp/
+#   - even though this file lives in that directory.
+#
+# WHY PER-APP FILES (instead of only the shared root .dockerignore)
+#   - Each app's build carries its ignore rules right next to its
+#     Dockerfile, so the two are versioned, reviewed and changed together.
+#   - The two apps can diverge (different env files, auth files, artifacts)
+#     without touching a shared file that other builds rely on.
+#   - "Exclude every other app, keep this one" cannot be expressed from a
+#     single shared root file at all - a root file does not know which
+#     Dockerfile is being built.
+#
+# GOAL
+#   Keep the context small and focused on this app (this app's sources, the
+#   shared packages/ workspace packages, and the root workspace files), and
+#   most importantly keep secrets and local state OUT of the context so
+#   they can never end up in image layers.
+#
+# ORDERING CONSTRAINT - DO NOT REORDER CARELESSLY
+#   Matching follows gitignore rules: the LAST matching pattern wins. The
+#   "keep this app" negation below therefore MUST come BEFORE the artifact
+#   and secret exclusions. If it came after, it would re-include this
+#   app's node_modules/, .next/, .env* and .saleor-app-auth*.json files
+#   (they are direct children of the app directory and match !apps/smtp/*),
+#   silently defeating every exclusion above.
+#   Verified empirically: with the negation last, the app's .next,
+#   node_modules and env files leak into the context; with the negation
+#   first they are excluded again.
+# ============================================================================
+
+# --- The other apps: not needed by this build (MUST stay at the top) ------
+# Exclude the contents of every apps/<app>/ directory, then re-include this
+# app's contents. Two-level form (exclude children, then re-include) is
+# deliberate: gitignore-style matching cannot re-include a path whose
+# parent directory was excluded, so we exclude at the *children* level,
+# where the negation can win.
+apps/*/*
+!apps/smtp/*
+
+# --- VCS / agent-tooling directories: not needed by the build -------------
+.git
+.cursor
+.claude
+
+# --- Dependencies and build artifacts (rebuilt inside the image) ----------
+# These also re-exclude this app's own node_modules/ and .next/, which the
+# negation above would otherwise let through (see ordering constraint).
+**/node_modules
+**/.next
+**/.turbo
+**/*.tsbuildinfo
+
+# --- Secrets and local state: NEVER baked into images ----------------------
+# .env.docker is the gitignored runtime env (bind-mounted via compose);
+# .env.local holds local dev values (including SECRET_KEY). The build
+# receives every value it needs via ARG/ENV in the Dockerfile, so no env
+# file is needed in the context at all.
+**/.env
+**/.env.*
+# The app authentication file (FileAPL) and any local copies of it. It is
+# mounted into the running container by compose; it must never be built.
+**/.saleor-app-auth*.json
+
+# --- Local logs and OS noise ----------------------------------------------
+**/*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# CAUTION: BuildKit's context cache key does NOT include this file's
+# content. After changing it, a plain build can silently reuse cached
+# layers from the OLD context. Rebuild with
+#   docker compose build --no-cache
+# and verify the pure image (docker create + docker export on the
+# image, NOT the running container - the FileAPL bind mount hides the
+# image file; see the README, Validating the container).

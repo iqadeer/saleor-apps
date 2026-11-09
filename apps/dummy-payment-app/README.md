@@ -81,10 +81,10 @@ Copy the tested example (all values in it already work for this stack):
 cp .env.local.docker.example .env.local
 ```
 
-| Variable              | Value (local)                      | Purpose                                                                                   |
-| --------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------- |
-| `APP_IFRAME_BASE_URL` | `http://localhost:3001`            | **Browser → app** (manifest `appUrl`; the Dashboard iframe loads the app here)             |
-| `APP_API_BASE_URL`    | `http://host.docker.internal:3001` | **Saleor container → app** (registration endpoint and all webhook targets)                 |
+| Variable              | Value (local)                      | Purpose                                                                        |
+| --------------------- | ---------------------------------- | ------------------------------------------------------------------------------ |
+| `APP_IFRAME_BASE_URL` | `http://localhost:3001`            | **Browser → app** (manifest `appUrl`; the Dashboard iframe loads the app here) |
+| `APP_API_BASE_URL`    | `http://host.docker.internal:3001` | **Saleor container → app** (registration endpoint and all webhook targets)     |
 
 No secrets are needed: the app token arrives from Saleor at registration
 time and is stored in the gitignored `.saleor-app-auth.json` (file APL,
@@ -152,13 +152,13 @@ the channel currency (verified: `USD` on `default-channel`, `PLN` on
 
 - **App's own UI** (Dashboard → Dummy Payment App): create checkout → set
   delivery → choose the `TRANSACTION_INITIALIZE_SESSION` response (event
-type, e.g. `CHARGE_SUCCESS`) → initialize transaction → complete checkout.
+  type, e.g. `CHARGE_SUCCESS`) → initialize transaction → complete checkout.
 - **Paper storefront**: checkout calls `transactionInitialize` (no `action`
   arg; channel default strategy applies) then `checkoutComplete`. The
   client-side dummy-gateway filter requires
   `NEXT_PUBLIC_ALLOW_DUMMY_PAYMENT` to be **inlined at image build time** —
-  see `docs/troubleshooting.md` for the exact fix and symptom (*No payment
-  gateway configured* despite Saleor returning the gateway).
+  see `docs/troubleshooting.md` for the exact fix and symptom (_No payment
+  gateway configured_ despite Saleor returning the gateway).
 
 #### 9. End-to-end payment verification (verified against this stack)
 
@@ -177,6 +177,115 @@ If you develop against a tunnelled (ngrok) URL instead of local Docker, no
 environment variables are required at all — leave both base URLs unset and
 the app falls back to the request `Host` header. See
 [Saleor docs about local app development](https://docs.saleor.io/developer/extending/apps/local-app-development).
+
+### Running the app as a Docker container (production)
+
+The app ships with a multi-stage `Dockerfile` (Node 24 alpine, production
+build, non-root runner, health check on `/api/manifest`) and a `compose.yml`
+for direct-localhost deployment (Stage 1 — no Traefik labels yet; the
+container already joins the shared `saleor-proxy-net` network so Stage 2
+routing is a compose/network change, not a rebuild):
+
+- Browser (Dashboard iframe): `http://localhost:3001`
+- Saleor (registration + webhooks): `http://host.docker.internal:3001`
+
+```
+docker compose up -d --build    # build the image + start the container
+docker compose ps               # expect "Up ... (healthy)"
+```
+
+The image is `admincareout/kidl:saleor-app-dummy-payment-1.0`; the container
+listens on port `3000` internally, mapped to host port `3001`.
+
+#### How the build is assembled: context, Dockerfile and ignore file
+
+Three files in `apps/dummy-payment-app/` work together:
+
+| File                      | Role                                                                              |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| `Dockerfile`              | Multi-stage build (base → build → runner).                                        |
+| `Dockerfile.dockerignore` | Context exclusions for **this** build — see below.                                |
+| `compose.yml`             | Sets the build context, build args, ports, env file, auth-file mount and network. |
+
+1. **Build context = the monorepo root** (`context: ../..` in compose, or
+   `docker build -f apps/dummy-payment-app/Dockerfile <repo-root>` from the
+   CLI). The app uses pnpm `workspace:*` and `catalog:` dependencies that
+   only resolve from the root (`pnpm-lock.yaml` + `pnpm-workspace.yaml` +
+   `packages/`), so the app directory alone is not a valid context.
+2. **The ignore file is selected automatically.** Docker 25+ pairs every
+   Dockerfile with an ignore file named after it in the same directory:
+   `Dockerfile` → `Dockerfile.dockerignore`. No compose key or CLI flag is
+   involved. When that file exists it **replaces** the repository-root
+   `.dockerignore` for this build — the two are not merged — which is why
+   `Dockerfile.dockerignore` is self-contained.
+3. **What it does.** Because the context is the monorepo root, the ignore
+   file (patterns relative to the repo root) keeps only what this build
+   needs: this app's sources, the shared `packages/` workspace packages and
+   the root workspace files. It excludes every other app, all
+   `node_modules`/`.next` build output and — critically — every `.env*` and
+   `.saleor-app-auth*.json` file, so runtime env values and the app token
+   can never end up in image layers. Verified result: ~5 MB context
+   instead of ~4 GB.
+4. **Ordering constraint inside the ignore file.** Gitignore-style matching
+   gives the _last_ matching pattern the win. The app re-inclusion
+   (`apps/*/*` followed by `!apps/dummy-payment-app/*`) therefore must stay
+   **above** the artifact/secret exclusions; otherwise the negation would
+   re-include the app's own `node_modules/`, `.next/`, `.env*` and auth
+   files (they are direct children of the app directory). This was verified
+   empirically — move the negation below the exclusions and the app's env
+   and auth files leak into the context.
+
+#### Runtime configuration
+
+- **`.env.docker`** (gitignored; committed template:
+  [`.env.docker.example`](./.env.docker.example)) — runtime env loaded via
+  compose `env_file`. The two base URLs follow the same convention as local
+  development: browser-facing `APP_IFRAME_BASE_URL=http://localhost:3001`,
+  container-facing `APP_API_BASE_URL=http://host.docker.internal:3001`.
+- **`.saleor-app-auth.json`** — the app's FileAPL (token, `saleorApiUrl`,
+  `appId`, JWKS) is **bind-mounted read-write** into the container. The
+  mount is read-write because `/api/register` rewrites the file during
+  (re-)registration; the file itself never enters the image (excluded by
+  `Dockerfile.dockerignore`).
+- **`NEXT_PUBLIC_ALLOW_DUMMY_PAYMENT`** — build-time only (inlined into the
+  client bundle by `next build`); set it via a build arg / `.env`
+  interpolation and rebuild the image to change it. Defaults to `true`.
+- The `--webpack` build flag is required: Next 16.4.1's default turbopack
+  production build bakes hash-suffixed external require names into its
+  chunks that `next start` cannot resolve in a pnpm layout (see the
+  Dockerfile comment for details).
+
+#### Validating the container
+
+```sh
+docker compose ps                                   # Up ... (healthy)
+curl -sf http://localhost:3001/                      # app UI (200)
+curl -sf http://localhost:3001/api/manifest | head   # manifest JSON
+```
+
+Check the image layers for leaked secrets (NOT the running container -
+its `.saleor-app-auth.json` is the compose bind mount, which hides the
+image file at the same path, and the app runs as `node` so a leaked file
+would be visible there):
+
+```sh
+# 1. env files in the running container (none are mounted - expect failure)
+docker exec saleor-app-dummy-payment sh -c 'ls /app/.env*' || echo "clean: no .env* files"
+# 2. the FileAPL in the pure image (expect no match)
+docker create --name imgcheck admincareout/kidl:saleor-app-dummy-payment-1.0 >/dev/null
+docker export imgcheck | grep -c "app/.saleor-app-auth" || true
+docker rm -f imgcheck >/dev/null
+```
+
+If either check finds a file, a stale or mis-filtered context reached a
+build layer — fix the ignore file, then `docker compose build --no-cache`
+(BuildKit can reuse cached context layers across ignore-file changes; see
+the ignore file's CAUTION comment) and recreate the container.
+
+If the Saleor URL the app is registered against ever changes, re-register
+via `POST http://host.docker.internal:3001/api/register` with the
+`saleor-api-url` header — see
+[`docs/app-registration-and-auth.md`](docs/app-registration-and-auth.md).
 
 ### How to use the app?
 
